@@ -90,6 +90,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     <div><label>Client</label><input type="text" id="client" placeholder="ex. Expanscience"></div>
     <div><label>Site (facultatif)</label><input type="text" id="siteName" placeholder="ex. Site de Épernon"></div>
     <div><label>Auteur</label><input type="text" id="author" value="Davy Slila – Inspecteur Qualité"></div>
+    <div><label>Mode de comptage de l'activité</label><select id="countMode"><option value="qty">Quantités cumulées (somme du « nombre d'infestations »)</option><option value="rows">Récurrences (nombre de lignes d'activité)</option></select></div>
   </div>
 
   <div id="atdParams">
@@ -116,10 +117,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     <div id="themes"></div>
   </div>
 
-  <h3>Extraction myRentokil <small class="mut" id="extHint">(activité des dispositifs)</small></h3>
-  <input type="file" id="file" accept=".xlsx,.xls,.xlsm,.csv">
-  <div class="row" style="margin-top:8px"><div style="flex:1;min-width:240px"><label style="margin-top:0">Feuille à utiliser</label><select id="sheetSel" disabled></select></div></div>
-  <div id="fileStatus" class="note hidden"></div>
+  <h3>Fichiers myRentokil</h3>
+  <input type="file" id="file" multiple accept=".xlsx,.xls,.xlsm,.csv">
+  <small class="mut">Sélectionnez-les ensemble (Ctrl+clic) ou ajoutez-les un par un : <b>Activité de nuisibles</b> (obligatoire pour l'ADT), <b>Recommandations</b> et <b>Relevé des dispositifs du site</b> (Sitevisitdetail). Le type de chaque fichier est détecté automatiquement, vous pouvez le corriger. Plusieurs fichiers d'activité sont additionnés.</small>
+  <div id="fileList" style="margin-top:8px"></div>
+  <div id="fileSummary"></div>
 
   <h3>Familles contractuellement couvertes</h3>
   <small class="mut">Une famille cochée aura toujours sa slide, même à « 0 — aucune activité ». Les familles avec activité sont ajoutées automatiquement.</small>
@@ -211,7 +213,7 @@ const $=id=>document.getElementById(id);
 /* ===================== UI de base ===================== */
 document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>show(b.dataset.p));
 function show(p){document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('on',x.id===p));document.querySelectorAll('#nav button').forEach(x=>x.classList.toggle('on',x.dataset.p===p));if(p==='p4')renderPlan();}
-document.querySelectorAll('input[name=mode]').forEach(r=>r.onchange=()=>{S.mode=r.value;$('atdParams').classList.toggle('hidden',S.mode!=='atd');$('auditParams').classList.toggle('hidden',S.mode!=='audit');$('extHint').textContent=S.mode==='audit'?'(facultatif pour un audit : ajoute les slides d\'activité)':'(activité des dispositifs)';});
+document.querySelectorAll('input[name=mode]').forEach(r=>r.onchange=()=>{S.mode=r.value;$('atdParams').classList.toggle('hidden',S.mode!=='atd');$('auditParams').classList.toggle('hidden',S.mode!=='audit');$('countMode').value=S.mode==='audit'?'rows':'qty';});
 $('themes').innerHTML=THEMES.map(t=>`<div class="cm"><b>${t.label}</b><div class="row"><select id="st_${t.id}" style="max-width:180px">${STATUTS.map(s=>`<option>${s}</option>`).join('')}</select></div><textarea id="nt_${t.id}" placeholder="Constats, observations de terrain (notes brutes)…"></textarea></div>`).join('');
 $('contract').innerHTML=CATS.filter(c=>c.id!=='autre').map(c=>`<label><input type="checkbox" data-c="${c.id}"> ${c.label}</label>`).join('');
 function iso(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
@@ -228,53 +230,92 @@ function toDate(v){
   if(typeof v==='string'){const m=v.trim().match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})/);if(m){let y=+m[3];if(y<100)y+=2000;return new Date(y,+m[2]-1,+m[1],12);}const d=new Date(v);if(!isNaN(d))return d;}
   return null;
 }
-function parseSheet(ws){
-  const a=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null});
-  let hi=-1,map=null;
+const ALIAS_REC={d:['date de la recommandation'],ref:['reference de la recommandation','reference'],zone:['zone'],emp:['emplacement','poste'],type:['type'],prio:['priorite'],statut:['statut de la recommandation','statut'],detail:['detail de la recommandation','detail','description']};
+const ALIAS_INV={emp:['emplacement','poste','dispositif','code','code dispositif','nom du dispositif','nom','identifiant','id','numero','reference','device','n dispositif'],zone:['zone'],bat:['batiment'],tdet:['type de dispositif','type de detecteur','detecteur','type','modele','categorie','type d appareil'],site:['site']};
+function findHeader(a,alias,need){
   for(let i=0;i<Math.min(a.length,15);i++){
     const hs=(a[i]||[]).map(norm);const m={};
-    for(const k in ALIAS){const j=hs.findIndex(h=>ALIAS[k].includes(h));if(j>=0)m[k]=j;}
-    if(m.d!=null&&m.emp!=null&&m.n!=null){hi=i;map=m;break;}
+    for(const k in alias){const j=hs.findIndex(h=>alias[k].includes(h));if(j>=0)m[k]=j;}
+    if(need(m))return{hi:i,map:m};
   }
-  if(hi<0)return{rows:[],ok:false};
+  return null;
+}
+const cell=(r,map,k)=>map[k]!=null&&r[map[k]]!=null?String(r[map[k]]).trim():'';
+function parseActivity(a){
+  const h=findHeader(a,ALIAS,m=>m.d!=null&&m.emp!=null&&m.n!=null);if(!h)return{rows:[]};
   const rows=[];
-  for(let i=hi+1;i<a.length;i++){
+  for(let i=h.hi+1;i<a.length;i++){
     const r=a[i];if(!r)continue;
-    const d=toDate(r[map.d]);const emp=r[map.emp];const n=Number(r[map.n]);
+    const d=toDate(r[h.map.d]);const emp=r[h.map.emp];const n=Number(r[h.map.n]);
     if(!d||emp==null||String(emp).trim()===''||isNaN(n))continue;
-    const g=k=>map[k]!=null&&r[map[k]]!=null?String(r[map[k]]).trim():'';
-    rows.push({d,emp:String(emp).trim(),zone:g('zone'),bat:g('bat'),site:g('site'),tdet:g('tdet'),nuis:g('nuis'),n});
+    rows.push({d,emp:String(emp).trim(),zone:cell(r,h.map,'zone'),bat:cell(r,h.map,'bat'),site:cell(r,h.map,'site'),tdet:cell(r,h.map,'tdet'),nuis:cell(r,h.map,'nuis'),n});
   }
-  return{rows,ok:true};
+  return{rows};
+}
+function parseReco(a){
+  const h=findHeader(a,ALIAS_REC,m=>m.d!=null&&(m.statut!=null||m.detail!=null));if(!h)return{rows:[]};
+  const rows=[];
+  for(let i=h.hi+1;i<a.length;i++){
+    const r=a[i];if(!r)continue;const d=toDate(r[h.map.d]);if(!d)continue;
+    rows.push({d,ref:cell(r,h.map,'ref'),zone:cell(r,h.map,'zone'),emp:cell(r,h.map,'emp'),type:cell(r,h.map,'type'),prio:cell(r,h.map,'prio'),statut:cell(r,h.map,'statut'),detail:cell(r,h.map,'detail')});
+  }
+  return{rows};
+}
+function parseInv(a){
+  const h=findHeader(a,ALIAS_INV,m=>m.emp!=null&&(m.zone!=null||m.bat!=null||m.tdet!=null));if(!h)return{rows:[]};
+  const rows=[];
+  for(let i=h.hi+1;i<a.length;i++){
+    const r=a[i];if(!r)continue;const emp=cell(r,h.map,'emp');if(!emp||emp.length>20)continue;
+    rows.push({emp,zone:cell(r,h.map,'zone'),bat:cell(r,h.map,'bat'),tdet:cell(r,h.map,'tdet'),site:cell(r,h.map,'site')});
+  }
+  return{rows};
+}
+const eh=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ROLES={act:'Activité de nuisibles',rec:'Recommandations',inv:'Relevé des dispositifs',none:'Ignorer ce fichier'};
+S.files=[];S.reco=[];S.inv=[];let fid=0;
+const sheetsOf=(f,role)=>Object.keys(f.sheets).filter(n=>f.sheets[n][role].rows.length>0).sort((a,b)=>f.sheets[b][role].rows.length-f.sheets[a][role].rows.length);
+async function addFile(file){
+  const f={id:++fid,name:file.name,sheets:{},role:'none',sheet:null};
+  try{
+    const wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true});
+    wb.SheetNames.forEach(nm=>{const a=XLSX.utils.sheet_to_json(wb.Sheets[nm],{header:1,raw:true,defval:null});f.sheets[nm]={act:parseActivity(a),rec:parseReco(a),inv:parseInv(a)};});
+    for(const rl of ['rec','act','inv']){const ss=sheetsOf(f,rl);if(ss.length){f.role=rl;f.sheet=ss[0];break;}}
+  }catch(e){f.err=e.message;}
+  S.files.push(f);
 }
 $('file').onchange=async e=>{
-  const f=e.target.files[0];if(!f)return;
-  try{
-    const buf=await f.arrayBuffer();
-    S.book=XLSX.read(buf,{type:'array',cellDates:true,dense:false});
-    S.parsed={};let best=null,bestN=0;
-    S.book.SheetNames.forEach(nm=>{const p=parseSheet(S.book.Sheets[nm]);S.parsed[nm]=p;if(p.ok&&p.rows.length>bestN){best=nm;bestN=p.rows.length;}});
-    const sel=$('sheetSel');
-    sel.innerHTML=S.book.SheetNames.map(nm=>`<option value="${nm}">${nm} — ${S.parsed[nm].ok?S.parsed[nm].rows.length+' lignes':'colonnes non reconnues'}</option>`).join('');
-    sel.disabled=false;
-    if(best){sel.value=best;useSheet(best);}else{S.rows=[];status('Aucune feuille ne contient les colonnes attendues (Date de l\'activité, Emplacement, Nombre d\'infestations).',true);}
-  }catch(err){status('Lecture impossible : '+err.message,true);}
+  for(const f of e.target.files)await addFile(f);
+  e.target.value='';renderFiles();refresh();
 };
-$('sheetSel').onchange=e=>useSheet(e.target.value);
-function useSheet(nm){
-  S.rows=S.parsed[nm].rows;
-  if(!S.rows.length){status('Feuille sans données exploitables.',true);return;}
-  const ts=S.rows.map(r=>r.d.getTime());const mn=new Date(Math.min(...ts)),mx=new Date(Math.max(...ts));
-  const fr=d=>d.toLocaleDateString('fr-FR');
-  status(`${S.rows.length} lignes d'activité lues · du ${fr(mn)} au ${fr(mx)}.`,false);
-  S.span=[mn,mx];
-  // périodes par défaut : N = 12 derniers mois des données
-  if(S.mode==='atd'&&!$('n0').value){
-    const end=new Date(mx.getFullYear(),mx.getMonth()+1,0);const st=new Date(end.getFullYear()-1,end.getMonth()+1,1);
-    $('n1').value=iso(end);$('n0').value=iso(st);$('n0').onchange();
-  }
+function renderFiles(){
+  $('fileList').innerHTML=S.files.map(f=>{
+    const ss=f.role!=='none'?sheetsOf(f,f.role):[];
+    const cnt=f.role!=='none'&&f.sheet?f.sheets[f.sheet][f.role].rows.length:0;
+    return `<div class="cm"><b>${eh(f.name)}</b>${f.err?'<div class="note">'+eh(f.err)+'</div>':''}${f.role==='none'&&!f.err?'<div class="note">Aucune feuille reconnue automatiquement : choisissez le type de fichier ci-dessous si besoin.</div>':''}
+    <div class="row"><select data-f="${f.id}" data-t="role" style="max-width:240px">${Object.keys(ROLES).map(k=>`<option value="${k}"${k===f.role?' selected':''}>${ROLES[k]}</option>`).join('')}</select>
+    ${ss.length>1?`<select data-f="${f.id}" data-t="sheet" style="max-width:300px">${ss.map(n=>`<option value="${eh(n)}"${n===f.sheet?' selected':''}>${eh(n)} (${f.sheets[n][f.role].rows.length})</option>`).join('')}</select>`:''}
+    <span>${f.role==='none'?'non utilisé':cnt+' lignes'}</span><button class="btn sec" data-f="${f.id}" data-t="del" style="padding:4px 10px">Retirer</button></div></div>`;}).join('');
+  $('fileList').querySelectorAll('[data-f]').forEach(el=>{
+    const f=S.files.find(x=>x.id==el.dataset.f);
+    if(el.dataset.t==='role')el.onchange=()=>{f.role=el.value;f.sheet=f.role!=='none'?(sheetsOf(f,f.role)[0]||null):null;renderFiles();refresh();};
+    if(el.dataset.t==='sheet')el.onchange=()=>{f.sheet=el.value;renderFiles();refresh();};
+    if(el.dataset.t==='del')el.onclick=()=>{S.files=S.files.filter(x=>x!==f);renderFiles();refresh();};
+  });
 }
-function status(t,err){const b=$('fileStatus');b.classList.remove('hidden');b.className=err?'note':'okbox';b.textContent=t;}
+function refresh(){
+  S.rows=[];S.reco=[];S.inv=[];
+  S.files.forEach(f=>{if(f.role==='none'||!f.sheet)return;const rows=f.sheets[f.sheet][f.role].rows;
+    if(f.role==='act')rows.forEach(r=>S.rows.push(r));else if(f.role==='rec')rows.forEach(r=>S.reco.push(r));else rows.forEach(r=>S.inv.push(r));});
+  const seen=new Set();S.inv=S.inv.filter(v=>{const k=v.emp.toUpperCase();if(seen.has(k))return false;seen.add(k);return true;});
+  const fr=d=>d.toLocaleDateString('fr-FR');const L=[];
+  if(S.rows.length){const ts=S.rows.map(r=>r.d.getTime());const mn=new Date(Math.min(...ts)),mx=new Date(Math.max(...ts));S.span=[mn,mx];
+    L.push(`✔ Activité : ${S.rows.length} lignes, du ${fr(mn)} au ${fr(mx)}.`);
+    if(S.mode==='atd'&&!$('n0').value){const end=new Date(mx.getFullYear(),mx.getMonth()+1,0);const st=new Date(end.getFullYear()-1,end.getMonth()+1,1);$('n1').value=iso(end);$('n0').value=iso(st);$('n0').onchange();}
+  }else L.push('✖ Activité de nuisibles : non fournie'+(S.mode==='atd'?' (obligatoire pour une ADT).':'.'));
+  L.push(S.reco.length?`✔ Recommandations : ${S.reco.length} lignes.`:'• Recommandations : non fournies (slide à rédiger manuellement).');
+  L.push(S.inv.length?`✔ Relevé des dispositifs : ${S.inv.length} postes installés.`:'• Relevé des dispositifs : non fourni (le parc total ne sera pas affiché ; les postes sans détection restent invisibles).');
+  $('fileSummary').innerHTML=S.files.length?`<div class="${S.rows.length?'okbox':'note'}">${L.join('<br>')}</div>`:'';
+}
 
 /* ===================== Analyse ===================== */
 function classify(r){
@@ -297,13 +338,26 @@ function lbl(d,step,i){const s=new Date(d.getFullYear(),d.getMonth()+i*step,1),e
   if(step===1)return MOIS[s.getMonth()]+' '+String(s.getFullYear()).slice(2);
   return MOIS[s.getMonth()]+(s.getFullYear()!==e.getFullYear()?' '+String(s.getFullYear()).slice(2):'')+'–'+MOIS[e.getMonth()]+' '+y;}
 function pct(n,p){return p>0?Math.round((n-p)/p*100):(n>0?null:0);}
+function recoStats(c){
+  const R=S.reco;if(!R.length)return null;
+  const closed=x=>/termin|cl[oô]tur|ferm|r[ée]solu|effectu|fait/i.test(x);
+  const urgent=x=>/rapid|urgent/i.test(x);
+  const cnt=f=>{const m=new Map();R.forEach(r=>{const k=f(r)||'—';m.set(k,(m.get(k)||0)+1);});return [...m].map(([name,n])=>({name,n})).sort((a,b)=>b.n-a.n);};
+  const open=R.filter(r=>!closed(r.statut));
+  return{total:R.length,closed:R.length-open.length,open:open.length,urgentOpen:open.filter(r=>urgent(r.prio)).length,
+    byType:cnt(r=>r.type),byPrio:cnt(r=>r.prio),byStatut:cnt(r=>r.statut),
+    inN:c.n0?R.filter(r=>r.d>=c.n0&&r.d<=c.n1).length:null,
+    rows:[...R].sort((a,b)=>(parseInt(b.ref)||0)-(parseInt(a.ref)||0)||b.d-a.d),openRows:open};
+}
 function compute(){
   const c=cfg();
-  if(!S.rows.length&&S.mode==='atd')throw new Error('Importez d\'abord une extraction.');
+  if(!S.rows.length&&S.mode==='atd')throw new Error('Importez d\'abord le fichier « Activité de nuisibles ».');
   if(S.mode==='atd'&&(!c.n0||!c.n1||!c.p0||!c.p1))throw new Error('Renseignez les périodes N et N-1.');
+  const rowsMode=$('countMode').value==='rows';
   const nb=c.n0&&c.n1?Math.ceil((mi(c.n1)-mi(c.n0)+1)/c.step):0;
-  const res={cfg:c,nb,cats:{},unclassified:0};
-  CATS.forEach(k=>res.cats[k.id]={...k,rows:0,totN:0,totP:0,pN:new Set(),pP:new Set(),b:Array.from({length:nb},()=>({N:0,P:0})),dev:new Map(),zone:new Map(),sp:new Map()});
+  const res={cfg:c,nb,cats:{},unclassified:0,hasInv:S.inv.length>0,rowsMode,missing:[]};
+  CATS.forEach(k=>res.cats[k.id]={...k,rows:0,totN:0,totP:0,pN:new Set(),pP:new Set(),b:Array.from({length:nb},()=>({N:0,P:0})),dev:new Map(),zone:new Map(),sp:new Map(),inv:new Map(),zoneInv:new Map(),invN:0,noActN:0});
+  S.inv.forEach(v=>{const k=res.cats[classify({emp:v.emp,tdet:v.tdet})];k.inv.set(v.emp.toUpperCase(),v);const z=v.zone||'—';k.zoneInv.set(z,(k.zoneInv.get(z)||0)+1);});
   S.rows.forEach(r=>{
     const t=r.d.getTime();let per=null,base=null;
     if(c.n0&&t>=c.n0.getTime()&&t<=c.n1.getTime()){per='N';base=c.n0;}
@@ -311,22 +365,27 @@ function compute(){
     if(!per)return;
     const k=res.cats[classify(r)];if(k.id==='autre')res.unclassified++;
     k.rows++;
+    const w=rowsMode?1:r.n,act=rowsMode?true:r.n>0,key=r.emp.toUpperCase();
     const idx=Math.floor((mi(r.d)-mi(base))/c.step);
-    if(per==='N'){k.totN+=r.n;if(r.n>0)k.pN.add(r.emp);}else{k.totP+=r.n;if(r.n>0)k.pP.add(r.emp);}
-    if(idx>=0&&idx<nb)k.b[idx][per]+=r.n;
-    const dv=k.dev.get(r.emp)||{id:r.emp,zone:r.zone,bat:r.bat,N:0,P:0};dv[per]+=r.n;k.dev.set(r.emp,dv);
-    const zn=r.zone||'—';const z=k.zone.get(zn)||{name:zn,N:0,P:0};z[per]+=r.n;k.zone.set(zn,z);
-    if(r.nuis){const s=k.sp.get(r.nuis)||{name:r.nuis,N:0,P:0};s[per]+=r.n;k.sp.set(r.nuis,s);}
+    if(per==='N'){k.totN+=w;if(act)k.pN.add(key);}else{k.totP+=w;if(act)k.pP.add(key);}
+    if(idx>=0&&idx<nb)k.b[idx][per]+=w;
+    const dv=k.dev.get(key)||{id:r.emp,zone:r.zone,bat:r.bat,N:0,P:0};dv[per]+=w;k.dev.set(key,dv);
+    const zn=r.zone||'—';const z=k.zone.get(zn)||{name:zn,N:0,P:0};z[per]+=w;k.zone.set(zn,z);
+    if(r.nuis){const s=k.sp.get(r.nuis)||{name:r.nuis,N:0,P:0};s[per]+=w;k.sp.set(r.nuis,s);}
   });
+  CATS.forEach(k=>{const x=res.cats[k.id];x.invN=x.inv.size;
+    if(res.hasInv){x.noActN=[...x.inv.keys()].filter(e=>!x.pN.has(e)).length;
+      [...x.dev.keys()].forEach(e=>{if(!x.inv.has(e)&&(x.dev.get(e).N>0||x.dev.get(e).P>0))res.missing.push(x.dev.get(e).id);});}});
   res.labels=Array.from({length:nb},(_,i)=>lbl(c.n0,c.step,i));
   res.nLabel=c.n0?c.n0.toLocaleDateString('fr-FR')+' → '+c.n1.toLocaleDateString('fr-FR'):'';
   res.pLabel=c.p0?c.p0.toLocaleDateString('fr-FR')+' → '+c.p1.toLocaleDateString('fr-FR'):'';
+  res.reco=recoStats(c);
   return res;
 }
 function contractSet(){return new Set([...document.querySelectorAll('#contract input:checked')].map(i=>i.dataset.c));}
 function activeCats(){
   const cs=contractSet();
-  return CATS.filter(k=>{const x=S.res.cats[k.id];return cs.has(k.id)||x.totN+x.totP>0;});
+  return CATS.filter(k=>{const x=S.res.cats[k.id];return cs.has(k.id)||x.totN+x.totP>0||(k.id!=='autre'&&x.invN>0);});
 }
 const fmtVar=(n,p)=>{const v=pct(n,p);return v===null?'nouveau':(v>0?'+':'')+v+' %';};
 const cls=(n,p)=>n>p?'up':(n<p?'down':'');
@@ -335,12 +394,15 @@ $('goAnalyse').onclick=()=>{
   renderResults();show('p2');$('goPrompt').disabled=false;
 };
 function renderResults(){
-  const r=S.res,atd=S.mode==='atd';
-  let h=`<small class="mut">Période N : ${r.nLabel}${atd?' · Période N-1 : '+r.pLabel:''}</small>`;
+  const r=S.res,atd=S.mode==='atd',inv=r.hasInv;
+  let h=`<small class="mut">Période N : ${r.nLabel}${atd?' · Période N-1 : '+r.pLabel:''} · comptage : ${r.rowsMode?'récurrences (lignes)':'quantités cumulées'}</small>`;
   if(r.unclassified)h+=`<div class="note">${r.unclassified} ligne(s) n'ont pu être rattachées à une famille (préfixe de poste inconnu) : elles figurent dans « Autres dispositifs ».</div>`;
-  h+=`<table><tr><th>Famille</th><th class="num">N</th>${atd?'<th class="num">N-1</th><th class="num">Évolution</th>':''}<th class="num">Postes actifs N</th></tr>`;
-  activeCats().forEach(k=>{const x=r.cats[k.id];h+=`<tr><td>${k.label} <small class="mut">(${k.unit})</small></td><td class="num">${x.totN}</td>${atd?`<td class="num">${x.totP}</td><td class="num ${cls(x.totN,x.totP)}">${fmtVar(x.totN,x.totP)}</td>`:''}<td class="num">${x.pN.size}</td></tr>`;});
+  if(r.missing.length)h+=`<div class="note"><b>Points à vérifier :</b> ${r.missing.length} poste(s) avec activité absent(s) du relevé des dispositifs : ${[...new Set(r.missing)].slice(0,15).map(eh).join(', ')}${r.missing.length>15?'…':''}.</div>`;
+  h+=`<table><tr><th>Famille</th>${inv?'<th class="num">Postes installés</th>':''}<th class="num">N</th>${atd?'<th class="num">N-1</th><th class="num">Évolution</th>':''}<th class="num">Postes actifs N</th>${inv?'<th class="num">Taux</th>':''}</tr>`;
+  activeCats().forEach(k=>{const x=r.cats[k.id];const tx=inv&&x.invN?Math.round(x.pN.size/x.invN*100)+' %':'';
+    h+=`<tr><td>${k.label} <small class="mut">(${k.unit})</small></td>${inv?`<td class="num">${x.invN}</td>`:''}<td class="num">${x.totN}</td>${atd?`<td class="num">${x.totP}</td><td class="num ${cls(x.totN,x.totP)}">${fmtVar(x.totN,x.totP)}</td>`:''}<td class="num">${x.pN.size}</td>${inv?`<td class="num">${tx}</td>`:''}</tr>`;});
   h+='</table>';
+  if(r.reco){const R=r.reco;h+=`<h3>Recommandations</h3><div class="okbox">${R.total} recommandation(s) : ${R.closed} clôturée(s), ${R.open} ouverte(s) dont ${R.urgentOpen} à faire rapidement. Types : ${R.byType.slice(0,5).map(t=>eh(t.name)+' ('+t.n+')').join(', ')}.</div>`;}
   $('resBox').innerHTML=h;
 }
 
@@ -351,10 +413,10 @@ function buildMap(){
   const m=new Map();// original(lower) -> {orig,token}
   const add=(orig,token)=>{orig=(orig||'').trim();if(!orig||orig.length<2)return;const k=orig.toLowerCase();if(!m.has(k))m.set(k,{orig,token});};
   add($('client').value,'CLIENT');
-  const sites=new Set(S.rows.map(r=>r.site).filter(Boolean));$('siteName').value&&sites.add($('siteName').value);
+  const sites=new Set(S.rows.concat(S.inv).map(r=>r.site).filter(Boolean));$('siteName').value&&sites.add($('siteName').value);
   let i=0;sites.forEach(s=>add(s,i++?'SITE_'+i:'SITE'));
   const bats=new Set(),zones=new Set(),posts=new Set();
-  S.rows.forEach(r=>{if(r.bat&&!GENERIC.test(r.bat))bats.add(r.bat);if(r.zone&&!GENERIC.test(r.zone))zones.add(r.zone);posts.add(r.emp);});
+  S.rows.concat(S.inv,S.reco).forEach(r=>{if(r.bat&&!GENERIC.test(r.bat))bats.add(r.bat);if(r.zone&&!GENERIC.test(r.zone))zones.add(r.zone);if(r.emp)posts.add(r.emp);});
   i=0;[...bats].sort().forEach(b=>add(b,'BATIMENT_'+(++i)));
   i=0;[...zones].sort().forEach(z=>add(z,'ZONE_'+(++i)));
   if($('anonPostes').checked){i=0;[...posts].sort().forEach(p=>add(p,'POSTE_'+(++i)));}
@@ -363,7 +425,7 @@ function buildMap(){
   const list=[...m.values()].sort((a,b)=>b.orig.length-a.orig.length);
   return list;
 }
-function anon(s,list){if(typeof s!=='string')return s;let o=s;list.forEach(e=>{o=o.replace(new RegExp(esc(e.orig),'gi'),e.token);});return o;}
+function anon(s,list){if(typeof s!=='string')return s;let o=s;list.forEach(e=>{o=o.replace(new RegExp(esc(e.orig),'gi'),e.token);});return o.replace(/\b(M\.|Mme|Mlle|Mr|Monsieur|Madame)\s+[A-ZÀ-Ý][\p{L}'’-]+(\s+[A-ZÀ-Ý][\p{L}'’-]+)?/gu,'PERSONNE');}
 function deanon(s,list){let o=s;[...list].sort((a,b)=>b.token.length-a.token.length).forEach(e=>{o=o.replace(new RegExp('\\b'+esc(e.token)+'\\b','g'),e.orig);});return o;}
 function deep(o,f){if(Array.isArray(o))return o.map(x=>deep(x,f));if(o&&typeof o==='object'){const r={};for(const k in o)r[k]=deep(o[k],f);return r;}return typeof o==='string'?f(o):o;}
 
@@ -376,16 +438,23 @@ function buildPayload(){
     client:$('client').value||'CLIENT',
     periode_N:r.nLabel,periode_N1:atd?r.pLabel:undefined,
     periodicite:atd?{1:'mensuelle',3:'trimestrielle',6:'semestrielle',12:'annuelle'}[r.cfg.step]:undefined,
+    mode_comptage:r.rowsMode?'recurrences (nombre de lignes d\'activite)':'quantites cumulees',
     familles:activeCats().map(k=>{const x=r.cats[k.id];return{
       id:k.id,libelle:k.label,unite:k.unit,libelle_postes:k.post,
       total_N:x.totN,total_N1:atd?x.totP:undefined,variation_pct:atd?pct(x.totN,x.totP):undefined,
       postes_avec_activite_N:x.pN.size,postes_avec_activite_N1:atd?x.pP.size:undefined,
+      postes_installes:r.hasInv?x.invN:undefined,postes_sans_activite_N:r.hasInv?x.noActN:undefined,taux_postes_actifs_pct:r.hasInv&&x.invN?Math.round(x.pN.size/x.invN*100):undefined,
       evolution_par_periode:r.labels.map((l,i)=>({periode:l,N:x.b[i].N,N1:atd?x.b[i].P:undefined})),
       postes_principaux:top(x.dev,'N',8).map(d=>({poste:d.id,zone:d.zone,N:d.N,N1:atd?d.P:undefined})),
       zones:top(x.zone,'N',6).map(z=>({zone:z.name,N:z.N,N1:atd?z.P:undefined})),
       especes:top(x.sp,'N',6).map(s=>({espece:s.name,N:s.N,N1:atd?s.P:undefined}))
     };})
   };
+  if(r.hasInv&&r.missing.length)payload.postes_actifs_absents_du_releve_dispositifs=[...new Set(r.missing)].slice(0,20);
+  if(r.reco){const R=r.reco;const tr=(t,n)=>String(t||'').length>n?String(t).slice(0,n)+'…':String(t||'');
+    payload.recommandations={total:R.total,cloturees:R.closed,ouvertes:R.open,ouvertes_a_faire_rapidement:R.urgentOpen,emises_periode_N:R.inN,
+      par_type:R.byType.slice(0,8),par_priorite:R.byPrio,par_statut:R.byStatut,
+      detail_ouvertes:R.openRows.slice(0,15).map(x=>({ref:x.ref,date:x.d.toLocaleDateString('fr-FR'),type:x.type,priorite:x.prio,statut:x.statut,poste:x.emp,zone:x.zone,detail:tr(x.detail,160)}))};}
   if(!atd){
     payload.date_visite=$('visitDate').value||undefined;
     payload.constats=THEMES.map(t=>({id:t.id,theme:t.label,statut:$('st_'+t.id).value,notes_brutes:$('nt_'+t.id).value}));
@@ -395,8 +464,9 @@ function buildPayload(){
 function keysPlan(){
   const atd=S.mode==='atd',keys=[{k:'synthese',label:'Synthèse générale'}];
   if(!atd)THEMES.forEach(t=>keys.push({k:'th_'+t.id,label:t.label}));
+  if(S.res&&S.res.hasInv)keys.push({k:'dispositif',label:'Dispositif en place (relevé des dispositifs)'});
   if(S.res)activeCats().forEach(c=>{const x=S.res.cats[c.id];if(x.totN+x.totP===0)return;keys.push({k:c.id+'_evo',label:c.label+' — évolution'});keys.push({k:c.id+'_postes',label:c.label+' — postes et zones'});});
-  keys.push({k:'reco',label:'Recommandations / plan d\'actions'});
+  keys.push({k:'reco',label:S.res&&S.res.reco?'Recommandations — synthèse de l’avancement':'Recommandations / plan d\'actions'});
   return keys;
 }
 $('goPrompt').onclick=()=>{
@@ -418,7 +488,9 @@ CONSIGNES DE RÉDACTION :
 - Garde tels quels les codes anonymisés (CLIENT, SITE, ZONE_x, BATIMENT_x, POSTE_x, TERME_x) et les identifiants de postes.
 - ${atd?'Compare N à N-1 : tendance (hausse/baisse/stable), ampleur, périodes et zones qui expliquent l\'écart.':'Pour chaque thème d\'audit, reformule les notes brutes en constat professionnel et indique le niveau de conformité ; ne rien ajouter qui ne figure pas dans les notes.'}
 - Si une famille n'a aucune activité, dis-le simplement.
-- "reco" : 3 à 5 recommandations concrètes et priorisées, déduites des seuls éléments fournis.
+- Si "postes_installes" est fourni, situe les postes avec activité par rapport au parc installé (taux) ; sinon ne parle jamais du parc total.
+- "dispositif" (si demandé) : lecture du parc installé par famille et des familles sans activité ; mentionne les "postes_actifs_absents_du_releve_dispositifs" comme point de vigilance.
+- "reco" : ${S.res&&S.res.reco?'synthèse de l’avancement des recommandations du client (clôturées / ouvertes, priorités, thèmes dominants d’après "recommandations"), sans réécrire chaque ligne':'3 à 5 recommandations concrètes et priorisées, déduites des seuls éléments fournis'}.
 
 COMMENTAIRES ATTENDUS :
 ${desc}
@@ -460,6 +532,8 @@ $('autoText').onclick=()=>{
     S.comments[c.id+'_evo']=atd?`${c.label} : ${x.totN} ${c.unit} sur la période N contre ${x.totP} sur N-1 (${fmtVar(x.totN,x.totP)}).`:`${c.label} : ${x.totN} ${c.unit} sur la période.`;
     S.comments[c.id+'_postes']=`${x.pN.size} ${c.post} sur la période N`+(atd?` (${x.pP.size} sur N-1)`:'')+(top&&top.N?`. Poste le plus sollicité : ${top.id} (${top.N}).`:'.');
   });
+  if(S.res.hasInv)S.comments.dispositif=activeCats().filter(c=>S.res.cats[c.id].invN).map(c=>{const x=S.res.cats[c.id];return `${c.label} : ${x.pN.size} poste(s) avec activité sur ${x.invN} installé(s).`;}).join(' ');
+  if(S.res.reco){const R=S.res.reco;S.comments.reco=`${R.total} recommandation(s) : ${R.closed} clôturée(s), ${R.open} ouverte(s) dont ${R.urgentOpen} à faire rapidement.`;}
   renderComments();
 };
 
@@ -467,10 +541,11 @@ $('autoText').onclick=()=>{
 function renderPlan(){
   if(!S.res&&S.mode==='atd'){$('planBox').innerHTML='<div class="note">Lancez d\'abord l\'analyse (étape 1).</div>';$('exportPptx').disabled=true;return;}
   const items=['Page de garde','Synthèse'];
+  if(S.res&&S.res.hasInv)items.push('Dispositif en place');
   if(S.mode==='audit')THEMES.forEach(t=>items.push(t.label));
   if(S.res)activeCats().forEach(c=>{const x=S.res.cats[c.id];items.push(c.label+(x.totN+x.totP===0?' (0 — aucune activité)':' (2 slides)'));});
   if(S.res&&activeCats().some(c=>S.res.cats[c.id].pN.size))items.push('Plans avec activités');
-  items.push('Recommandations','Fin du rapport');if(S.mode==='audit')items.splice(2,0,'Sommaire');
+  items.push(S.res&&S.res.reco?'Recommandations (synthèse + détail)':'Recommandations','Fin du rapport');if(S.mode==='audit')items.splice(2,0,'Sommaire');
   $('planBox').innerHTML='<div class="chips">'+items.map(i=>`<label>${i}</label>`).join('')+'</div>';
   $('exportPptx').disabled=false;
 }
@@ -541,13 +616,25 @@ function buildPptx(){
   {const s=content('Synthèse');
     const hdr=o=>({text:o,options:{bold:true,color:'FFFFFF',fill:{color:NAVY},fontFace:F,fontSize:10}});
     if(r){const cats=activeCats();
-      const head=[hdr('Famille'),hdr(atd?'N':'Total')];if(atd)head.push(hdr('N-1'),hdr('Évolution'));head.push(hdr('Postes avec activité (N)'));
+      const head=[hdr('Famille'),hdr(atd?'N':'Total')];if(atd)head.push(hdr('N-1'),hdr('Évolution'));head.push(hdr('Postes actifs (N)'));if(r.hasInv)head.push(hdr('Installés'));
       const rows=[head].concat(cats.map(c=>{const x=r.cats[c.id];const row=[{text:c.label},{text:String(x.totN)}];
         if(atd)row.push({text:String(x.totP)},{text:fmtVar(x.totN,x.totP),options:{bold:true,color:x.totN>x.totP?RED:(x.totN<x.totP?GREEN:NAVY)}});
-        row.push({text:String(x.pN.size)});return row.map(c=>({text:c.text,options:Object.assign({fontFace:F,fontSize:10,color:NAVY},c.options||{})}));}));
-      s.addTable(rows,{x:0.4,y:1.05,w:5.7,colW:atd?[2.0,0.6,0.6,0.9,1.6]:[3.2,1,1.5],border:{type:'solid',pt:0.5,color:'DDE1E7'},autoPage:false});}
+        row.push({text:String(x.pN.size)});if(r.hasInv)row.push({text:String(x.invN)});return row.map(c=>({text:c.text,options:Object.assign({fontFace:F,fontSize:10,color:NAVY},c.options||{})}));}));
+      s.addTable(rows,{x:0.4,y:1.05,w:5.7,colW:r.hasInv?(atd?[1.6,0.5,0.5,0.8,0.9,0.8]:[2.3,0.8,1.3,1.1]):(atd?[2.0,0.6,0.6,0.9,1.6]:[3.2,1,1.5]),border:{type:'solid',pt:0.5,color:'DDE1E7'},autoPage:false});}
     else s.addText('Aucune extraction d\'activité fournie pour cet audit.',{x:0.4,y:1.2,w:5.7,h:0.5,fontFace:F,fontSize:11,color:'667085'});
     analyse(s,6.3,1.05,3.3,3.95,'synthese','Analyse');}
+
+  // ---- Dispositif en place
+  if(r&&r.hasInv){const s=content('Dispositif en place');
+    const H=t=>({text:t,options:{bold:true,color:'FFFFFF',fill:{color:NAVY},fontFace:F,fontSize:10}});
+    const T=(t,o)=>({text:String(t),options:Object.assign({fontFace:F,fontSize:10,color:NAVY},o||{})});
+    const cs=activeCats().filter(c=>r.cats[c.id].invN>0);
+    const rows=[[H('Famille'),H('Installés'),H('Avec activité (N)'),H('Sans activité'),H('Taux')]].concat(cs.map(c=>{const x=r.cats[c.id];return[T(c.label),T(x.invN),T(x.pN.size),T(x.noActN),T(Math.round(x.pN.size/x.invN*100)+' %',{bold:true})];}));
+    const tot=cs.reduce((a,c)=>{const x=r.cats[c.id];a.i+=x.invN;a.a+=x.pN.size;a.n+=x.noActN;return a;},{i:0,a:0,n:0});
+    rows.push([T('Total',{bold:true}),T(tot.i,{bold:true}),T(tot.a,{bold:true}),T(tot.n,{bold:true}),T(tot.i?Math.round(tot.a/tot.i*100)+' %':'',{bold:true})]);
+    s.addTable(rows,{x:0.4,y:1.05,w:5.7,colW:[2.1,0.8,1.0,0.9,0.9],border:{type:'solid',pt:0.5,color:'DDE1E7'}});
+    if(r.missing.length)s.addText('À vérifier : postes avec activité absents du relevé — '+[...new Set(r.missing)].slice(0,10).join(', '),{x:0.4,y:4.5,w:5.7,h:0.6,fontFace:F,fontSize:9,color:'667085',valign:'top'});
+    analyse(s,6.3,1.05,3.3,3.95,'dispositif','Analyse');}
 
   // ---- Audit : thèmes
   if(!atd){
@@ -571,7 +658,7 @@ function buildPptx(){
     withData.forEach(c=>{const x=r.cats[c.id];
       if(x.totN+x.totP===0){const s=content(c.label);
         s.addText('0',{x:0.4,y:1.4,w:9.2,h:1.4,fontFace:F,fontSize:80,bold:true,color:NAVY,align:'center'});
-        s.addText('Aucune activité enregistrée sur la période',{x:0.4,y:2.9,w:9.2,h:0.5,fontFace:F,fontSize:16,color:'667085',align:'center'});
+        s.addText(r.hasInv&&x.invN?'Aucune activité sur les '+x.invN+' postes installés':'Aucune activité enregistrée sur la période',{x:0.4,y:2.9,w:9.2,h:0.5,fontFace:F,fontSize:16,color:'667085',align:'center'});
         if((S.comments[c.id+'_evo']||'').trim())card(s,0.6,3.8,8.8,0.9,c.id+'_evo');
         return;}
       if(atd)divider(c.label,CATIMG[c.id],'Analyse',periodShort);
@@ -588,12 +675,14 @@ function buildPptx(){
       const dv=[...x.dev.values()].sort((a,b)=>b.N-a.N||b.P-a.P).slice(0,10).reverse();
       const d2=[{name:'N',labels:dv.map(d=>d.id),values:dv.map(d=>d.N)}];if(atd)d2.push({name:'N-1',labels:dv.map(d=>d.id),values:dv.map(d=>d.P)});
       s.addText('Postes les plus sollicités',{x:0.4,y:0.95,w:5.4,h:0.3,fontFace:F,fontSize:11,bold:true,color:NAVY});
+      s.addText(r.hasInv&&x.invN?`Postes avec activité : ${x.pN.size} sur ${x.invN} installés (${Math.round(x.pN.size/x.invN*100)} %)`:`Postes avec activité : ${x.pN.size}`,{x:6.0,y:0.95,w:3.6,h:0.3,fontFace:F,fontSize:10,bold:true,color:RED});
       s.addChart(pptx.charts.BAR,d2,{x:0.4,y:1.25,w:5.4,h:3.95,barDir:'bar',barGrouping:'clustered',chartColors:colors,showLegend:atd,legendPos:'b',legendFontSize:9,catAxisLabelFontSize:9,valAxisLabelFontSize:9,showValue:true,dataLabelFontSize:8,valGridLine:{color:'E5E7EB',size:0.5},showTitle:false});
       const zs=[...x.zone.values()].sort((a,b)=>b.N-a.N||b.P-a.P).slice(0,6);
       const H=t=>({text:t,options:{bold:true,color:'FFFFFF',fill:{color:NAVY},fontFace:F,fontSize:9}});
-      const zr=[[H('Zone'),H('N')].concat(atd?[H('N-1')]:[])].concat(zs.map(z=>[{text:z.name,options:{fontFace:F,fontSize:9,color:NAVY}},{text:String(z.N),options:{fontFace:F,fontSize:9,color:NAVY}}].concat(atd?[{text:String(z.P),options:{fontFace:F,fontSize:9,color:NAVY}}]:[])));
-      s.addTable(zr,{x:6.0,y:1.0,w:3.6,colW:atd?[2.0,0.8,0.8]:[2.6,1.0],border:{type:'solid',pt:0.5,color:'DDE1E7'}});
-      card(s,6.0,3.55,3.6,1.65,c.id+'_postes');
+      const zi=r.hasInv;const zt=t=>({text:String(t),options:{fontFace:F,fontSize:9,color:NAVY}});
+      const zr=[[H('Zone')].concat(zi?[H('Installés')]:[],[H('N')],atd?[H('N-1')]:[])].concat(zs.map(z=>[zt(z.name)].concat(zi?[zt(x.zoneInv.get(z.name)||0)]:[],[zt(z.N)],atd?[zt(z.P)]:[])));
+      s.addTable(zr,{x:6.0,y:1.3,w:3.6,colW:zi?(atd?[1.5,0.7,0.7,0.7]:[1.9,0.9,0.8]):(atd?[2.0,0.8,0.8]:[2.6,1.0]),border:{type:'solid',pt:0.5,color:'DDE1E7'}});
+      card(s,6.0,3.6,3.6,1.6,c.id+'_postes');
     });
     // plans avec activités
     const plan=[];
@@ -606,7 +695,22 @@ function buildPptx(){
 
   // ---- Reco + fin
   divider('Recommandations','reco');
-  {const s=content('Recommandations');analyse(s,0.4,1.1,9.2,3.9,'reco','Recommandations');}
+  if(r&&r.reco){const R=r.reco;
+    let s=content('Recommandations — synthèse');
+    kpi(s,0.4,1.0,2.9,'Total des recommandations',R.total);kpi(s,3.55,1.0,2.9,'Clôturées',R.closed,GREEN);kpi(s,6.7,1.0,2.9,'Ouvertes à faire rapidement',R.urgentOpen,R.urgentOpen?RED:NAVY);
+    const bt=R.byType.slice(0,8).reverse();
+    s.addChart(pptx.charts.BAR,[{name:'Recommandations',labels:bt.map(t=>t.name),values:bt.map(t=>t.n)}],{x:0.4,y:2.0,w:5.8,h:3.2,barDir:'bar',chartColors:[RED],showLegend:false,catAxisLabelFontSize:9,valAxisLabelFontSize:9,showValue:true,dataLabelFontSize:9,valGridLine:{color:'E5E7EB',size:0.5},showTitle:false});
+    analyse(s,6.4,2.0,3.2,3.2,'reco','Analyse');
+    const PER=11,np=Math.ceil(R.rows.length/PER);
+    for(let i=0;i<R.rows.length;i+=PER){
+      const s2=content('Recommandations — détail'+(np>1?` (${i/PER+1}/${np})`:''));
+      const H=t=>({text:t,options:{bold:true,color:'FFFFFF',fill:{color:NAVY},fontFace:F,fontSize:8}});
+      const T=t=>({text:String(t),options:{fontFace:F,fontSize:7,color:NAVY}});
+      const sh=(t,n)=>{t=String(t||'').replace(/\s+/g,' ');return t.length>n?t.slice(0,n-1)+'…':t;};
+      const rows=[[H('Réf.'),H('Date'),H('Zone'),H('Poste'),H('Type'),H('Priorité'),H('Statut'),H('Détail')]].concat(R.rows.slice(i,i+PER).map(x=>[T(x.ref),T(x.d.toLocaleDateString('fr-FR')),T(sh(x.zone,22)),T(x.emp),T(x.type),T(x.prio.replace(/^A /,'À ')),T(x.statut),T(sh(x.detail,115))]));
+      s2.addTable(rows,{x:0.4,y:1.05,w:9.2,colW:[0.5,0.8,1.2,0.7,1.0,1.2,0.8,3.0],border:{type:'solid',pt:0.5,color:'DDE1E7'}});
+    }
+  }else{const s=content('Recommandations');analyse(s,0.4,1.1,9.2,3.9,'reco','Recommandations');}
   {const s=pptx.addSlide();s.background={color:NAVY};photo(s,atd?'deiv_cover':'night',6.2,0,3.8,5.225);
     s.addShape('rect',{x:0,y:0,w:6.2,h:5.225,fill:{color:NAVY},line:{color:NAVY}});
     logo(s,0.5,0.45,1.9);

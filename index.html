@@ -90,7 +90,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     <div><label>Client</label><input type="text" id="client" placeholder="ex. Expanscience"></div>
     <div><label>Site (facultatif)</label><input type="text" id="siteName" placeholder="ex. Site de Épernon"></div>
     <div><label>Auteur</label><input type="text" id="author" value="Davy Slila – Inspecteur Qualité"></div>
-    <div><label>Mode de comptage de l'activité</label><select id="countMode"><option value="qty">Quantités cumulées (somme du « nombre d'infestations »)</option><option value="rows">Récurrences (nombre de lignes d'activité)</option></select></div>
+    <div><label>Mesure principale des graphiques</label><select id="countMode"><option value="qty">Quantités (somme du « nombre d'infestations »)</option><option value="rows">Récurrences (nombre de relevés avec activité)</option></select><small class="mut">L'autre mesure est toujours affichée en complément. Par défaut : quantités pour l'ADT, récurrences pour l'audit (selon tes modèles).</small></div>
   </div>
 
   <div id="atdParams">
@@ -110,8 +110,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     <h3>Visite</h3>
     <div class="grid">
       <div><label>Date de la visite</label><input type="date" id="visitDate"></div>
-      <div><label>Période de l'extraction – début (facultatif)</label><input type="date" id="a0"></div>
-      <div><label>Période de l'extraction – fin (facultatif)</label><input type="date" id="a1"></div>
+      <div><label>Période analysée – début</label><input type="date" id="a0"></div>
+      <div><label>Période analysée – fin</label><input type="date" id="a1"></div>
+      <div><label>Périodicité des graphiques</label><select id="stepA"><option value="1" selected>Mensuelle</option><option value="3">Trimestrielle</option><option value="6">Semestrielle</option><option value="12">Annuelle</option></select></div>
     </div>
     <h3>Constats de la visite terrain</h3>
     <div id="themes"></div>
@@ -213,7 +214,7 @@ const $=id=>document.getElementById(id);
 /* ===================== UI de base ===================== */
 document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>show(b.dataset.p));
 function show(p){document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('on',x.id===p));document.querySelectorAll('#nav button').forEach(x=>x.classList.toggle('on',x.dataset.p===p));if(p==='p4')renderPlan();}
-document.querySelectorAll('input[name=mode]').forEach(r=>r.onchange=()=>{S.mode=r.value;$('atdParams').classList.toggle('hidden',S.mode!=='atd');$('auditParams').classList.toggle('hidden',S.mode!=='audit');$('countMode').value=S.mode==='audit'?'rows':'qty';});
+document.querySelectorAll('input[name=mode]').forEach(r=>r.onchange=()=>{S.mode=r.value;$('atdParams').classList.toggle('hidden',S.mode!=='atd');$('auditParams').classList.toggle('hidden',S.mode!=='audit');$('countMode').value=S.mode==='audit'?'rows':'qty';prefill();});
 $('themes').innerHTML=THEMES.map(t=>`<div class="cm"><b>${t.label}</b><div class="row"><select id="st_${t.id}" style="max-width:180px">${STATUTS.map(s=>`<option>${s}</option>`).join('')}</select></div><textarea id="nt_${t.id}" placeholder="Constats, observations de terrain (notes brutes)…"></textarea></div>`).join('');
 $('contract').innerHTML=CATS.filter(c=>c.id!=='autre').map(c=>`<label><input type="checkbox" data-c="${c.id}"> ${c.label}</label>`).join('');
 function iso(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
@@ -302,15 +303,20 @@ function renderFiles(){
     if(el.dataset.t==='del')el.onclick=()=>{S.files=S.files.filter(x=>x!==f);renderFiles();refresh();};
   });
 }
+function prefill(){
+  if(!S.span)return;const mx=S.span[1];
+  const end=new Date(mx.getFullYear(),mx.getMonth()+1,0),st=new Date(end.getFullYear()-1,end.getMonth()+1,1);
+  if(S.mode==='atd'){if(!$('n0').value){$('n1').value=iso(end);$('n0').value=iso(st);$('n0').onchange();}}
+  else if(!$('a0').value){$('a1').value=iso(end);$('a0').value=iso(st);}
+}
 function refresh(){
   S.rows=[];S.reco=[];S.inv=[];
   S.files.forEach(f=>{if(f.role==='none'||!f.sheet)return;const rows=f.sheets[f.sheet][f.role].rows;
     if(f.role==='act')rows.forEach(r=>S.rows.push(r));else if(f.role==='rec')rows.forEach(r=>S.reco.push(r));else rows.forEach(r=>S.inv.push(r));});
   const seen=new Set();S.inv=S.inv.filter(v=>{const k=v.emp.toUpperCase();if(seen.has(k))return false;seen.add(k);return true;});
   const fr=d=>d.toLocaleDateString('fr-FR');const L=[];
-  if(S.rows.length){const ts=S.rows.map(r=>r.d.getTime());const mn=new Date(Math.min(...ts)),mx=new Date(Math.max(...ts));S.span=[mn,mx];
+  if(S.rows.length){const ts=S.rows.map(r=>r.d.getTime());const mn=new Date(Math.min(...ts)),mx=new Date(Math.max(...ts));S.span=[mn,mx];prefill();
     L.push(`✔ Activité : ${S.rows.length} lignes, du ${fr(mn)} au ${fr(mx)}.`);
-    if(S.mode==='atd'&&!$('n0').value){const end=new Date(mx.getFullYear(),mx.getMonth()+1,0);const st=new Date(end.getFullYear()-1,end.getMonth()+1,1);$('n1').value=iso(end);$('n0').value=iso(st);$('n0').onchange();}
   }else L.push('✖ Activité de nuisibles : non fournie'+(S.mode==='atd'?' (obligatoire pour une ADT).':'.'));
   L.push(S.reco.length?`✔ Recommandations : ${S.reco.length} lignes.`:'• Recommandations : non fournies (slide à rédiger manuellement).');
   L.push(S.inv.length?`✔ Relevé des dispositifs : ${S.inv.length} postes installés.`:'• Relevé des dispositifs : non fourni (le parc total ne sera pas affiché ; les postes sans détection restent invisibles).');
@@ -331,7 +337,7 @@ function cfg(){
   const g=id=>$(id).value?new Date($(id).value+'T00:00:00'):null;
   const eod=d=>d?new Date(d.getFullYear(),d.getMonth(),d.getDate(),23,59,59):null;
   if(S.mode==='atd')return{mode:'atd',n0:g('n0'),n1:eod(g('n1')),p0:g('p0'),p1:eod(g('p1d')),step:+$('step').value};
-  return{mode:'audit',n0:g('a0')||(S.span&&S.span[0]),n1:eod(g('a1'))||(S.span&&S.span[1]),p0:null,p1:null,step:1};
+  return{mode:'audit',n0:g('a0')||(S.span&&S.span[0]),n1:eod(g('a1'))||(S.span&&S.span[1]),p0:null,p1:null,step:+$('stepA').value};
 }
 const mi=d=>d.getFullYear()*12+d.getMonth();
 function lbl(d,step,i){const s=new Date(d.getFullYear(),d.getMonth()+i*step,1),e=new Date(d.getFullYear(),d.getMonth()+i*step+step-1,1);const y=String(e.getFullYear()).slice(2);
@@ -355,8 +361,8 @@ function compute(){
   if(S.mode==='atd'&&(!c.n0||!c.n1||!c.p0||!c.p1))throw new Error('Renseignez les périodes N et N-1.');
   const rowsMode=$('countMode').value==='rows';
   const nb=c.n0&&c.n1?Math.ceil((mi(c.n1)-mi(c.n0)+1)/c.step):0;
-  const res={cfg:c,nb,cats:{},unclassified:0,hasInv:S.inv.length>0,rowsMode,missing:[]};
-  CATS.forEach(k=>res.cats[k.id]={...k,rows:0,totN:0,totP:0,pN:new Set(),pP:new Set(),b:Array.from({length:nb},()=>({N:0,P:0})),dev:new Map(),zone:new Map(),sp:new Map(),inv:new Map(),zoneInv:new Map(),invN:0,noActN:0});
+  const res={cfg:c,nb,cats:{},unclassified:0,hasInv:S.inv.length>0,rowsMode,missing:[],m1:rowsMode?'récurrences':'quantités',m2:rowsMode?'quantités':'récurrences'};
+  CATS.forEach(k=>res.cats[k.id]={...k,rows:0,totN:0,totP:0,tot2N:0,tot2P:0,pN:new Set(),pP:new Set(),b:Array.from({length:nb},()=>({N:0,P:0})),dev:new Map(),zone:new Map(),sp:new Map(),inv:new Map(),zoneInv:new Map(),invN:0,noActN:0});
   S.inv.forEach(v=>{const k=res.cats[classify({emp:v.emp,tdet:v.tdet})];k.inv.set(v.emp.toUpperCase(),v);const z=v.zone||'—';k.zoneInv.set(z,(k.zoneInv.get(z)||0)+1);});
   S.rows.forEach(r=>{
     const t=r.d.getTime();let per=null,base=null;
@@ -365,13 +371,13 @@ function compute(){
     if(!per)return;
     const k=res.cats[classify(r)];if(k.id==='autre')res.unclassified++;
     k.rows++;
-    const w=rowsMode?1:r.n,act=rowsMode?true:r.n>0,key=r.emp.toUpperCase();
+    const w=rowsMode?1:r.n,w2=rowsMode?r.n:1,act=rowsMode?true:r.n>0,key=r.emp.toUpperCase();
     const idx=Math.floor((mi(r.d)-mi(base))/c.step);
-    if(per==='N'){k.totN+=w;if(act)k.pN.add(key);}else{k.totP+=w;if(act)k.pP.add(key);}
+    if(per==='N'){k.totN+=w;k.tot2N+=w2;if(act)k.pN.add(key);}else{k.totP+=w;k.tot2P+=w2;if(act)k.pP.add(key);}
     if(idx>=0&&idx<nb)k.b[idx][per]+=w;
-    const dv=k.dev.get(key)||{id:r.emp,zone:r.zone,bat:r.bat,N:0,P:0};dv[per]+=w;k.dev.set(key,dv);
-    const zn=r.zone||'—';const z=k.zone.get(zn)||{name:zn,N:0,P:0};z[per]+=w;k.zone.set(zn,z);
-    if(r.nuis){const s=k.sp.get(r.nuis)||{name:r.nuis,N:0,P:0};s[per]+=w;k.sp.set(r.nuis,s);}
+    const dv=k.dev.get(key)||{id:r.emp,zone:r.zone,bat:r.bat,N:0,P:0,N2:0,P2:0};dv[per]+=w;dv[per+'2']+=w2;k.dev.set(key,dv);
+    const zn=r.zone||'—';const z=k.zone.get(zn)||{name:zn,N:0,P:0,N2:0,P2:0};z[per]+=w;z[per+'2']+=w2;k.zone.set(zn,z);
+    if(r.nuis){const s=k.sp.get(r.nuis)||{name:r.nuis,N:0,P:0,N2:0,P2:0};s[per]+=w;s[per+'2']+=w2;k.sp.set(r.nuis,s);}
   });
   CATS.forEach(k=>{const x=res.cats[k.id];x.invN=x.inv.size;
     if(res.hasInv){x.noActN=[...x.inv.keys()].filter(e=>!x.pN.has(e)).length;
@@ -398,9 +404,9 @@ function renderResults(){
   let h=`<small class="mut">Période N : ${r.nLabel}${atd?' · Période N-1 : '+r.pLabel:''} · comptage : ${r.rowsMode?'récurrences (lignes)':'quantités cumulées'}</small>`;
   if(r.unclassified)h+=`<div class="note">${r.unclassified} ligne(s) n'ont pu être rattachées à une famille (préfixe de poste inconnu) : elles figurent dans « Autres dispositifs ».</div>`;
   if(r.missing.length)h+=`<div class="note"><b>Points à vérifier :</b> ${r.missing.length} poste(s) avec activité absent(s) du relevé des dispositifs : ${[...new Set(r.missing)].slice(0,15).map(eh).join(', ')}${r.missing.length>15?'…':''}.</div>`;
-  h+=`<table><tr><th>Famille</th>${inv?'<th class="num">Postes installés</th>':''}<th class="num">N</th>${atd?'<th class="num">N-1</th><th class="num">Évolution</th>':''}<th class="num">Postes actifs N</th>${inv?'<th class="num">Taux</th>':''}</tr>`;
+  h+=`<table><tr><th>Famille</th>${inv?'<th class="num">Postes installés</th>':''}<th class="num">N (${r.m1})</th>${atd?'<th class="num">N-1</th><th class="num">Évolution</th>':''}<th class="num">N (${r.m2})</th><th class="num">Postes actifs N</th>${inv?'<th class="num">Taux</th>':''}</tr>`;
   activeCats().forEach(k=>{const x=r.cats[k.id];const tx=inv&&x.invN?Math.round(x.pN.size/x.invN*100)+' %':'';
-    h+=`<tr><td>${k.label} <small class="mut">(${k.unit})</small></td>${inv?`<td class="num">${x.invN}</td>`:''}<td class="num">${x.totN}</td>${atd?`<td class="num">${x.totP}</td><td class="num ${cls(x.totN,x.totP)}">${fmtVar(x.totN,x.totP)}</td>`:''}<td class="num">${x.pN.size}</td>${inv?`<td class="num">${tx}</td>`:''}</tr>`;});
+    h+=`<tr><td>${k.label} <small class="mut">(${k.unit})</small></td>${inv?`<td class="num">${x.invN}</td>`:''}<td class="num">${x.totN}</td>${atd?`<td class="num">${x.totP}</td><td class="num ${cls(x.totN,x.totP)}">${fmtVar(x.totN,x.totP)}</td>`:''}<td class="num">${x.tot2N}</td><td class="num">${x.pN.size}</td>${inv?`<td class="num">${tx}</td>`:''}</tr>`;});
   h+='</table>';
   if(r.reco){const R=r.reco;h+=`<h3>Recommandations</h3><div class="okbox">${R.total} recommandation(s) : ${R.closed} clôturée(s), ${R.open} ouverte(s) dont ${R.urgentOpen} à faire rapidement. Types : ${R.byType.slice(0,5).map(t=>eh(t.name)+' ('+t.n+')').join(', ')}.</div>`;}
   $('resBox').innerHTML=h;
@@ -440,14 +446,14 @@ function buildPayload(){
     periodicite:atd?{1:'mensuelle',3:'trimestrielle',6:'semestrielle',12:'annuelle'}[r.cfg.step]:undefined,
     mode_comptage:r.rowsMode?'recurrences (nombre de lignes d\'activite)':'quantites cumulees',
     familles:activeCats().map(k=>{const x=r.cats[k.id];return{
-      id:k.id,libelle:k.label,unite:k.unit,libelle_postes:k.post,
+      id:k.id,libelle:k.label,unite:k.unit,libelle_postes:k.post,mesure_principale:r.m1,autre_mesure:r.m2,total_N_autre_mesure:x.tot2N,total_N1_autre_mesure:atd?x.tot2P:undefined,
       total_N:x.totN,total_N1:atd?x.totP:undefined,variation_pct:atd?pct(x.totN,x.totP):undefined,
       postes_avec_activite_N:x.pN.size,postes_avec_activite_N1:atd?x.pP.size:undefined,
       postes_installes:r.hasInv?x.invN:undefined,postes_sans_activite_N:r.hasInv?x.noActN:undefined,taux_postes_actifs_pct:r.hasInv&&x.invN?Math.round(x.pN.size/x.invN*100):undefined,
       evolution_par_periode:r.labels.map((l,i)=>({periode:l,N:x.b[i].N,N1:atd?x.b[i].P:undefined})),
       postes_principaux:top(x.dev,'N',8).map(d=>({poste:d.id,zone:d.zone,N:d.N,N1:atd?d.P:undefined})),
-      zones:top(x.zone,'N',6).map(z=>({zone:z.name,N:z.N,N1:atd?z.P:undefined})),
-      especes:top(x.sp,'N',6).map(s=>({espece:s.name,N:s.N,N1:atd?s.P:undefined}))
+      zones:top(x.zone,'N',6).map(z=>({zone:z.name,N:z.N,N1:atd?z.P:undefined,N_autre_mesure:z.N2})),
+      especes:top(x.sp,'N',8).map(s=>({espece:s.name,N:s.N,N1:atd?s.P:undefined,N_autre_mesure:s.N2}))
     };})
   };
   if(r.hasInv&&r.missing.length)payload.postes_actifs_absents_du_releve_dispositifs=[...new Set(r.missing)].slice(0,20);
@@ -465,7 +471,7 @@ function keysPlan(){
   const atd=S.mode==='atd',keys=[{k:'synthese',label:'Synthèse générale'}];
   if(!atd)THEMES.forEach(t=>keys.push({k:'th_'+t.id,label:t.label}));
   if(S.res&&S.res.hasInv)keys.push({k:'dispositif',label:'Dispositif en place (relevé des dispositifs)'});
-  if(S.res)activeCats().forEach(c=>{const x=S.res.cats[c.id];if(x.totN+x.totP===0)return;keys.push({k:c.id+'_evo',label:c.label+' — évolution'});keys.push({k:c.id+'_postes',label:c.label+' — postes et zones'});});
+  if(S.res)activeCats().forEach(c=>{const x=S.res.cats[c.id];if(x.totN+x.totP===0)return;keys.push({k:c.id+'_evo',label:c.label+' — évolution'});keys.push({k:c.id+'_postes',label:c.label+' — postes et zones'});if(x.sp.size>0||x.zone.size>1)keys.push({k:c.id+'_typo',label:c.label+' — typologie et répartition'});});
   keys.push({k:'reco',label:S.res&&S.res.reco?'Recommandations — synthèse de l’avancement':'Recommandations / plan d\'actions'});
   return keys;
 }
@@ -488,6 +494,8 @@ CONSIGNES DE RÉDACTION :
 - Garde tels quels les codes anonymisés (CLIENT, SITE, ZONE_x, BATIMENT_x, POSTE_x, TERME_x) et les identifiants de postes.
 - ${atd?'Compare N à N-1 : tendance (hausse/baisse/stable), ampleur, périodes et zones qui expliquent l\'écart.':'Pour chaque thème d\'audit, reformule les notes brutes en constat professionnel et indique le niveau de conformité ; ne rien ajouter qui ne figure pas dans les notes.'}
 - Si une famille n'a aucune activité, dis-le simplement.
+- Chaque famille fournit deux mesures : "mesure_principale" (graphiques) et "autre_mesure". Cite les deux quand c'est utile : récurrences = nombre de relevés avec activité ; quantités = nombre cumulé d'individus ou de captures.
+- Les clés "..._typo" commentent la typologie des nuisibles (espèces dominantes et leur part) et la répartition par zone.
 - Si "postes_installes" est fourni, situe les postes avec activité par rapport au parc installé (taux) ; sinon ne parle jamais du parc total.
 - "dispositif" (si demandé) : lecture du parc installé par famille et des familles sans activité ; mentionne les "postes_actifs_absents_du_releve_dispositifs" comme point de vigilance.
 - "reco" : ${S.res&&S.res.reco?'synthèse de l’avancement des recommandations du client (clôturées / ouvertes, priorités, thèmes dominants d’après "recommandations"), sans réécrire chaque ligne':'3 à 5 recommandations concrètes et priorisées, déduites des seuls éléments fournis'}.
@@ -530,6 +538,7 @@ $('autoText').onclick=()=>{
   activeCats().forEach(c=>{const x=S.res.cats[c.id];if(x.totN+x.totP===0)return;
     const top=[...x.dev.values()].sort((a,b)=>b.N-a.N)[0];
     S.comments[c.id+'_evo']=atd?`${c.label} : ${x.totN} ${c.unit} sur la période N contre ${x.totP} sur N-1 (${fmtVar(x.totN,x.totP)}).`:`${c.label} : ${x.totN} ${c.unit} sur la période.`;
+    S.comments[c.id+'_typo']=(()=>{const sp=[...x.sp.values()].sort((a,b)=>b.N-a.N).slice(0,3).filter(t=>t.N>0);return sp.length?'Espèces dominantes : '+sp.map(t=>`${t.name} (${t.N})`).join(', ')+'.':'';})();
     S.comments[c.id+'_postes']=`${x.pN.size} ${c.post} sur la période N`+(atd?` (${x.pP.size} sur N-1)`:'')+(top&&top.N?`. Poste le plus sollicité : ${top.id} (${top.N}).`:'.');
   });
   if(S.res.hasInv)S.comments.dispositif=activeCats().filter(c=>S.res.cats[c.id].invN).map(c=>{const x=S.res.cats[c.id];return `${c.label} : ${x.pN.size} poste(s) avec activité sur ${x.invN} installé(s).`;}).join(' ');
@@ -588,6 +597,7 @@ function buildPptx(){
     if(sub)s.addText(sub,{x:0.5,y:3.65,w:3.7,h:0.6,fontFace:F,fontSize:11,color:'C9D1DE',valign:'top'});
     footer(s);};
   const periodShort=atd?'N : '+r.nLabel:'';
+  const m1=r?r.m1:'',m2=r?r.m2:'',cap=t=>t.charAt(0).toUpperCase()+t.slice(1);
 
   // ---- Couverture
   {const s=pptx.addSlide();s.background={color:NAVY};
@@ -664,11 +674,13 @@ function buildPptx(){
       if(atd)divider(c.label,CATIMG[c.id],'Analyse',periodShort);
       // slide 1 : évolution
       let s=content(c.label+' — évolution');
-      kpi(s,0.4,1.0,2.9,atd?'Période N ('+c.unit+')':c.unit,x.totN);
-      if(atd){kpi(s,3.55,1.0,2.9,'Période N-1 ('+c.unit+')',x.totP);kpi(s,6.7,1.0,2.9,'Évolution',fmtVar(x.totN,x.totP),x.totN>x.totP?RED:(x.totN<x.totP?GREEN:NAVY));}
-      else kpi(s,3.55,1.0,2.9,c.post.charAt(0).toUpperCase()+c.post.slice(1),x.pN.size);
+      if(atd){kpi(s,0.4,1.0,2.9,'Période N — '+m1,x.totN);kpi(s,3.55,1.0,2.9,'Période N-1 — '+m1,x.totP);kpi(s,6.7,1.0,2.9,'Évolution',fmtVar(x.totN,x.totP),x.totN>x.totP?RED:(x.totN<x.totP?GREEN:NAVY));}
+      else{kpi(s,0.4,1.0,2.9,cap(m1),x.totN);kpi(s,3.55,1.0,2.9,cap(m2),x.tot2N);kpi(s,6.7,1.0,2.9,'Postes avec activité',r.hasInv&&x.invN?x.pN.size+' / '+x.invN:x.pN.size);}
       const data=[{name:'N',labels:r.labels,values:x.b.map(b=>b.N)}];if(atd)data.push({name:'N-1',labels:r.labels,values:x.b.map(b=>b.P)});
-      s.addChart(pptx.charts.BAR,data,{x:0.4,y:2.0,w:5.8,h:3.2,barDir:'col',barGrouping:'clustered',chartColors:colors,showLegend:atd,legendPos:'b',legendFontSize:9,legendFontFace:F,catAxisLabelFontSize:9,valAxisLabelFontSize:9,catAxisLabelFontFace:F,showValue:true,dataLabelFontSize:8,dataLabelPosition:'outEnd',valGridLine:{color:'E5E7EB',size:0.5},showTitle:false});
+      const common={x:0.4,y:2.0,w:5.8,h:atd?3.0:3.2,chartColors:colors,showLegend:atd,legendPos:'b',legendFontSize:9,legendFontFace:F,catAxisLabelFontSize:9,valAxisLabelFontSize:9,catAxisLabelFontFace:F,showValue:true,dataLabelFontSize:8,valGridLine:{color:'E5E7EB',size:0.5},showTitle:false};
+      if(atd)s.addChart(pptx.charts.LINE,data,Object.assign({lineSize:2,lineDataSymbolSize:7,dataLabelPosition:'t'},common));
+      else s.addChart(pptx.charts.BAR,data,Object.assign({barDir:'col',barGrouping:'clustered',dataLabelPosition:'outEnd'},common));
+      if(atd)s.addText(`${cap(m2)} : N ${x.tot2N} · N-1 ${x.tot2P} (${fmtVar(x.tot2N,x.tot2P)})`+(r.hasInv&&x.invN?` — postes avec activité : ${x.pN.size}/${x.invN}`:''),{x:0.4,y:5.0,w:5.8,h:0.25,fontFace:F,fontSize:9,color:'667085'});
       analyse(s,6.4,2.0,3.2,3.2,c.id+'_evo');
       // slide 2 : postes & zones
       s=content(c.label+' — postes et zones');
@@ -683,6 +695,16 @@ function buildPptx(){
       const zr=[[H('Zone')].concat(zi?[H('Installés')]:[],[H('N')],atd?[H('N-1')]:[])].concat(zs.map(z=>[zt(z.name)].concat(zi?[zt(x.zoneInv.get(z.name)||0)]:[],[zt(z.N)],atd?[zt(z.P)]:[])));
       s.addTable(zr,{x:6.0,y:1.3,w:3.6,colW:zi?(atd?[1.5,0.7,0.7,0.7]:[1.9,0.9,0.8]):(atd?[2.0,0.8,0.8]:[2.6,1.0]),border:{type:'solid',pt:0.5,color:'DDE1E7'}});
       card(s,6.0,3.6,3.6,1.6,c.id+'_postes');
+      {const sp=[...x.sp.values()].sort((a,b)=>b.N-a.N).filter(t=>t.N>0);
+       const zn=[...x.zone.values()].sort((a,b)=>b.N-a.N).filter(t=>t.N>0);
+       if(sp.length||zn.length>1){const s3=content(c.label+' — typologie et répartition');
+         const pal=[RED,NAVY,'4A6FA5',GREY,'E08A00',GREEN,'8E5BA8','C9D1DE','5B8DB8','B03A48'];
+         const topn=(arr,n)=>{const h=arr.slice(0,n),o=arr.slice(n).reduce((a,t)=>a+t.N,0);return o>0?h.concat([{name:'Autres',N:o}]):h;};
+         const pie=(arr,x0,w0,title)=>{if(!arr.length)return;const a=topn(arr,8);
+           s3.addText(title,{x:x0,y:0.95,w:w0,h:0.3,fontFace:F,fontSize:11,bold:true,color:NAVY});
+           s3.addChart(pptx.charts.PIE,[{name:title,labels:a.map(t=>t.name),values:a.map(t=>t.N)}],{x:x0,y:1.25,w:w0,h:2.8,chartColors:pal.slice(0,a.length),showLegend:true,legendPos:'r',legendFontSize:8,showPercent:true,showValue:false,dataLabelColor:'FFFFFF',dataLabelFontSize:8,showTitle:false});};
+         pie(sp,0.4,4.5,'Typologie des nuisibles ('+m1+', N)');pie(zn,5.0,4.6,'Répartition par zone ('+m1+', N)');
+         card(s3,0.4,4.15,9.2,1.05,c.id+'_typo');}}
     });
     // plans avec activités
     const plan=[];
